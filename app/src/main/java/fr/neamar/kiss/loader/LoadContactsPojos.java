@@ -3,16 +3,20 @@ package fr.neamar.kiss.loader;
 import android.content.ContentUris;
 import android.content.Context;
 import android.database.Cursor;
+import android.net.Uri;
 import android.provider.ContactsContract;
 import android.util.Log;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.regex.Pattern;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 import fr.neamar.kiss.normalizer.PhoneNormalizer;
 import fr.neamar.kiss.normalizer.StringNormalizer;
 import fr.neamar.kiss.pojo.ContactsPojo;
+import fr.neamar.kiss.utils.Permission;
 
 public class LoadContactsPojos extends LoadPojos<ContactsPojo> {
 
@@ -22,66 +26,74 @@ public class LoadContactsPojos extends LoadPojos<ContactsPojo> {
 
     @Override
     protected ArrayList<ContactsPojo> doInBackground(Void... params) {
-        Pattern homePattern = Pattern.compile("^\\+33\\s?[1-5]");
-
         long start = System.nanoTime();
 
+        ArrayList<ContactsPojo> contacts = new ArrayList<>();
+        Context c = context.get();
+        if(c == null) {
+            return contacts;
+        }
+
+        // Skip if we don't have permission to list contacts yet:(
+        if(!Permission.checkPermission(c, Permission.PERMISSION_READ_CONTACTS)) {
+            return contacts;
+        }
+
         // Run query
-        Cursor cur = context.getContentResolver().query(
+        Cursor cur = context.get().getContentResolver().query(
                 ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
                 new String[]{ContactsContract.Contacts.LOOKUP_KEY,
-                        ContactsContract.CommonDataKinds.Phone.TIMES_CONTACTED,
                         ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
                         ContactsContract.CommonDataKinds.Phone.NUMBER,
                         ContactsContract.CommonDataKinds.Phone.STARRED,
                         ContactsContract.CommonDataKinds.Phone.IS_PRIMARY,
-                        ContactsContract.Contacts.PHOTO_ID}, null, null, ContactsContract.CommonDataKinds.Phone.TIMES_CONTACTED + " DESC");
+                        ContactsContract.Contacts.PHOTO_ID,
+                        ContactsContract.Contacts._ID}, null, null, null);
 
-        // Prevent duplicates by keeping in memory encountered phones.
-        // The string key is "phone" + "|" + "name" (so if two contacts
-        // with distinct name share same number, they both get displayed)
-        HashMap<String, ArrayList<ContactsPojo>> mapContacts = new HashMap<>();
+        // Prevent duplicates by keeping in memory encountered contacts.
+        Map<String, Set<ContactsPojo>> mapContacts = new HashMap<>();
 
         if (cur != null) {
             if (cur.getCount() > 0) {
+                int lookupIndex = cur.getColumnIndex(ContactsContract.Contacts.LOOKUP_KEY);
+                int displayNameIndex = cur.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME);
+                int numberIndex = cur.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER);
+                int starredIndex = cur.getColumnIndex(ContactsContract.CommonDataKinds.Phone.STARRED);
+                int isPrimaryIndex = cur.getColumnIndex(ContactsContract.CommonDataKinds.Phone.IS_PRIMARY);
+                int photoIdIndex = cur.getColumnIndex(ContactsContract.Contacts.PHOTO_ID);
+                int contactIdIndex = cur.getColumnIndex(ContactsContract.Contacts._ID);
+
                 while (cur.moveToNext()) {
-                    ContactsPojo contact = new ContactsPojo();
+                    String lookupKey = cur.getString(lookupIndex);
+                    String name = cur.getString(displayNameIndex);
+                    int contactId = cur.getInt(contactIdIndex);
 
-                    contact.lookupKey = cur.getString(cur
-                            .getColumnIndex(ContactsContract.Contacts.LOOKUP_KEY));
-                    contact.timesContacted = Integer.parseInt(cur.getString(cur
-                            .getColumnIndex(ContactsContract.CommonDataKinds.Phone.TIMES_CONTACTED)));
-                    contact.setName(cur.getString(cur
-                            .getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)));
-                    contact.phone = PhoneNormalizer.normalizePhone(cur.getString(cur
-                            .getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)));
-                    if (contact.phone == null) {
-                        contact.phone = "";
+                    String phone = cur.getString(numberIndex);
+                    if (phone == null) {
+                        phone = "";
                     }
-                    contact.phoneSimplified = contact.phone.replaceAll("[-.(): ]", "");
 
-                    contact.homeNumber = homePattern.matcher(contact.phone).lookingAt();
-
-                    contact.starred = cur.getInt(cur
-                            .getColumnIndex(ContactsContract.CommonDataKinds.Phone.STARRED)) != 0;
-                    contact.primary = cur.getInt(cur
-                            .getColumnIndex(ContactsContract.CommonDataKinds.Phone.IS_PRIMARY)) != 0;
-                    String photoId = cur.getString(cur
-                            .getColumnIndex(ContactsContract.Contacts.PHOTO_ID));
+                    StringNormalizer.Result normalizedPhone = PhoneNormalizer.simplifyPhoneNumber(phone);
+                    boolean starred = cur.getInt(starredIndex) != 0;
+                    boolean primary = cur.getInt(isPrimaryIndex) != 0;
+                    String photoId = cur.getString(photoIdIndex);
+                    Uri icon = null;
                     if (photoId != null) {
-                        contact.icon = ContentUris.withAppendedId(ContactsContract.Data.CONTENT_URI,
+                        icon = ContentUris.withAppendedId(ContactsContract.Data.CONTENT_URI,
                                 Long.parseLong(photoId));
                     }
 
-                    contact.id = pojoScheme + contact.lookupKey + contact.phone;
+                    ContactsPojo contact = new ContactsPojo(pojoScheme + contactId + '/' + phone,
+                            lookupKey, phone, normalizedPhone, icon, primary,
+                            starred, false);
 
-                    if (contact.name != null) {
-                        contact.nameNormalized = StringNormalizer.normalize(contact.name);
+                    contact.setName(name);
 
+                    if (contact.getName() != null) {
                         if (mapContacts.containsKey(contact.lookupKey))
                             mapContacts.get(contact.lookupKey).add(contact);
                         else {
-                            ArrayList<ContactsPojo> phones = new ArrayList<>();
+                            Set<ContactsPojo> phones = new HashSet<>();
                             phones.add(contact);
                             mapContacts.put(contact.lookupKey, phones);
                         }
@@ -91,11 +103,35 @@ public class LoadContactsPojos extends LoadPojos<ContactsPojo> {
             cur.close();
         }
 
+        // Retrieve contacts' nicknames
+        Cursor nickCursor = context.get().getContentResolver().query(
+                ContactsContract.Data.CONTENT_URI,
+                new String[]{
+                        ContactsContract.CommonDataKinds.Nickname.NAME,
+                        ContactsContract.Data.LOOKUP_KEY},
+                ContactsContract.Data.MIMETYPE + "= ?",
+                new String[]{ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE},
+                null);
 
-        ArrayList<ContactsPojo> contacts = new ArrayList<>();
+        if (nickCursor != null) {
+            if (nickCursor.getCount() > 0) {
+                int lookupKeyIndex = nickCursor.getColumnIndex(ContactsContract.Data.LOOKUP_KEY);
+                int nickNameIndex = nickCursor.getColumnIndex(ContactsContract.CommonDataKinds.Nickname.NAME);
+                while (nickCursor.moveToNext()) {
+                    String lookupKey = nickCursor.getString(lookupKeyIndex);
+                    String nick = nickCursor.getString(nickNameIndex);
 
-        Pattern phoneFormatter = Pattern.compile("[ \\.\\(\\)]");
-        for (ArrayList<ContactsPojo> phones : mapContacts.values()) {
+                    if (nick != null && lookupKey != null && mapContacts.containsKey(lookupKey)) {
+                        for (ContactsPojo contact : mapContacts.get(lookupKey)) {
+                            contact.setNickname(nick);
+                        }
+                    }
+                }
+            }
+            nickCursor.close();
+        }
+
+        for (Set<ContactsPojo> phones : mapContacts.values()) {
             // Find primary phone and add this one.
             Boolean hasPrimary = false;
             for (ContactsPojo contact : phones) {
@@ -106,15 +142,12 @@ public class LoadContactsPojos extends LoadPojos<ContactsPojo> {
                 }
             }
 
-            // If not available, add all (excluding duplicates).
+            // If no primary available, add all (excluding duplicates).
             if (!hasPrimary) {
-                HashMap<String, Boolean> added = new HashMap<>();
+                HashSet<String> added = new HashSet<>(phones.size());
                 for (ContactsPojo contact : phones) {
-                    String uniqueKey = phoneFormatter.matcher(contact.phone).replaceAll("");
-                    uniqueKey = uniqueKey.replaceAll("^\\+33", "0");
-                    uniqueKey = uniqueKey.replaceAll("^\\+1", "0");
-                    if (!added.containsKey(uniqueKey)) {
-                        added.put(uniqueKey, true);
+                    if (!added.contains(contact.normalizedPhone.toString())) {
+                        added.add(contact.normalizedPhone.toString());
                         contacts.add(contact);
                     }
                 }

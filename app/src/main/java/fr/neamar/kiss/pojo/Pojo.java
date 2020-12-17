@@ -1,52 +1,30 @@
 package fr.neamar.kiss.pojo;
 
-import android.util.Pair;
-import java.util.ArrayList;
-
 import fr.neamar.kiss.normalizer.StringNormalizer;
 
 public abstract class Pojo {
+    public static final String DEFAULT_ID = "(none)";
+
     // Globally unique ID.
     // Usually starts with provider scheme, e.g. "app://" or "contact://" to
     // ensure unique constraint
-    public String id = "(none)";
-
-    // Name for this pojo, e.g. app name
-    public String name = "";
-
+    public String id;
+    // normalized name, for faster search
+    public StringNormalizer.Result normalizedName = null;
     // Lower-cased name, for faster search
-    public String nameNormalized = "";
-    // Name displayed on the screen, may contain HTML (for instance, to put
-    // query text in blue)
-    public String displayName = "";
+    //public String nameNormalized = "";
     // How relevant is this record ? The higher, the most probable it will be
     // displayed
     public int relevance = 0;
-    // Array that contains the non-normalized positions for every normalized
-    // character entry
-    private int[] namePositionMap = null;
+    // Name for this pojo, e.g. app name
+    String name = "";
 
-    /**
-     * Map a position in the normalized name to a position in the standard name string
-     *
-     * @param position Position in normalized name
-     * @return Position in non-normalized string
-     */
-    public int mapPosition(int position) {
-        if (this.namePositionMap != null) {
-            if (position < this.namePositionMap.length) {
-                return this.namePositionMap[position];
-            } else {
-                return this.name.length();
-            }
-        } else {
-            // No mapping defined
-            if (position < this.name.length()) {
-                return position;
-            } else {
-                return this.name.length();
-            }
-        }
+    public Pojo(String id) {
+        this.id = id;
+    }
+
+    public String getName() {
+        return name;
     }
 
     /**
@@ -59,48 +37,38 @@ public abstract class Pojo {
      * @param name User-friendly name of this container
      */
     public void setName(String name) {
-        // Set the actual user-friendly name
-        this.name = name;
-
         if (name != null) {
-            this.name = this.name.replaceAll("<", "&lt;");
-            // Normalize name for faster searching
-            Pair<String, int[]> normalized = StringNormalizer.normalizeWithMap(this.name);
-            this.nameNormalized = normalized.first;
-            this.namePositionMap = normalized.second;
+            // Set the actual user-friendly name
+            this.name = name;
+            this.normalizedName = StringNormalizer.normalizeWithResult(this.name, false);
+        } else {
+            this.name = null;
+            this.normalizedName = null;
+        }
+    }
+
+    public void setName(String name, boolean generateNormalization) {
+        if (generateNormalization) {
+            setName(name);
+        } else {
+            this.name = name;
+            this.normalizedName = null;
         }
     }
 
     /**
-     * Set which area of the display name should marked as highlighted in the `displayName`
-     * attribute
-     * <p/>
-     * The start and end positions should be offsets in the normalized string and will be converted
-     * to their non-normalized positions before they are used.
-     *
-     * @param positionNormalizedStart Highlighting start position in normalized name
-     * @param positionNormalizedEnd   Highlighting end position in normalized name
+     * ID to use in the history
+     * (may be different from the one used in the adapter for display)
      */
-    public void setDisplayNameHighlightRegion(int positionNormalizedStart, int positionNormalizedEnd) {
-        int positionStart = this.mapPosition(positionNormalizedStart);
-        int positionEnd = this.mapPosition(positionNormalizedEnd);
-
-        this.displayName = this.name.substring(0, positionStart)
-                + '{' + this.name.substring(positionStart, positionEnd) + '}'
-                + this.name.substring(positionEnd);
+    public String getHistoryId() {
+        return this.id;
     }
 
-    public void setDisplayNameHighlightRegion(ArrayList<Pair<Integer, Integer>> positions) {
-        this.displayName = "";
-        int lastPositionEnd = 0;
-        for (Pair<Integer, Integer> position : positions) {
-            int positionStart = this.mapPosition(position.first);
-            int positionEnd = this.mapPosition(position.second);
-
-            this.displayName += this.name.substring(lastPositionEnd, positionStart)
-                    + '{' + this.name.substring(positionStart, positionEnd) + '}';
-            lastPositionEnd = positionEnd;
-        }
-        this.displayName += this.name.substring(lastPositionEnd);
+    /**
+     * ID to use for favorites
+     * (may be different from the one used in the adapter for display, or for history)
+     */
+    public String getFavoriteId() {
+        return getHistoryId();
     }
 }

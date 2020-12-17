@@ -15,9 +15,13 @@ public class IncomingCallHandler extends BroadcastReceiver {
 
     @Override
     public void onReceive(final Context context, Intent intent) {
+        // Only handle calls received
+        if (!"android.intent.action.PHONE_STATE".equals(intent.getAction())) {
+            return;
+        }
 
         try {
-            DataHandler dataHandler = KissApplication.getDataHandler(context);
+            DataHandler dataHandler = KissApplication.getApplication(context).getDataHandler();
             ContactsProvider contactsProvider = dataHandler.getContactsProvider();
 
             // Stop if contacts are not enabled
@@ -28,14 +32,14 @@ public class IncomingCallHandler extends BroadcastReceiver {
             if (intent.getStringExtra(TelephonyManager.EXTRA_STATE).equals(TelephonyManager.EXTRA_STATE_RINGING)) {
                 String phoneNumber = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER);
 
-                if(phoneNumber == null) {
+                if (phoneNumber == null) {
                     // Skipping (private call)
                     return;
                 }
 
                 ContactsPojo contactPojo = contactsProvider.findByPhone(phoneNumber);
                 if (contactPojo != null) {
-                    dataHandler.addToHistory(contactPojo.id);
+                    dataHandler.addToHistory(contactPojo.getHistoryId());
                 }
             }
         } catch (Exception e) {

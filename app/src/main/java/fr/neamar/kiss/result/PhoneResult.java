@@ -1,55 +1,67 @@
 package fr.neamar.kiss.result;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.PorterDuff;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
-import android.os.Build;
 import android.provider.ContactsContract;
-import android.view.MenuItem;
+import android.util.Pair;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ArrayAdapter;
 import android.widget.ImageView;
-import android.widget.PopupMenu;
 import android.widget.TextView;
 
+import java.util.Collections;
+
+import androidx.annotation.NonNull;
 import fr.neamar.kiss.R;
 import fr.neamar.kiss.adapter.RecordAdapter;
 import fr.neamar.kiss.pojo.PhonePojo;
+import fr.neamar.kiss.ui.ListPopup;
+import fr.neamar.kiss.utils.FuzzyScore;
 
-public class PhoneResult extends Result {
+public class PhoneResult extends CallResult {
     private final PhonePojo phonePojo;
 
-    public PhoneResult(PhonePojo phonePojo) {
-        super();
-        this.pojo = this.phonePojo = phonePojo;
+    PhoneResult(PhonePojo phonePojo) {
+        super(phonePojo);
+        this.phonePojo = phonePojo;
+    }
+
+    @NonNull
+    @Override
+    public View display(Context context, View view, @NonNull ViewGroup parent, FuzzyScore fuzzyScore) {
+        if (view == null)
+            view = inflateFromId(context, R.layout.item_phone, parent);
+
+        TextView phoneText = view.findViewById(R.id.item_phone_text);
+        String text = String.format(context.getString(R.string.ui_item_phone), phonePojo.phone);
+        int pos = text.indexOf(phonePojo.phone);
+        int len = phonePojo.phone.length();
+        displayHighlighted(text, Collections.singletonList(new Pair<Integer, Integer>(pos, pos + len)), phoneText, context);
+
+        ((ImageView) view.findViewById(R.id.item_phone_icon)).setColorFilter(getThemeFillColor(context), PorterDuff.Mode.SRC_IN);
+
+        return view;
     }
 
     @Override
-    public View display(Context context, int position, View v) {
-        if (v == null)
-            v = inflateFromId(context, R.layout.item_phone);
+    protected ListPopup buildPopupMenu(Context context, ArrayAdapter<ListPopup.Item> adapter, final RecordAdapter parent, View parentView) {
+        adapter.add(new ListPopup.Item(context, R.string.menu_remove));
+        adapter.add(new ListPopup.Item(context, R.string.menu_favorites_add));
+        adapter.add(new ListPopup.Item(context, R.string.menu_favorites_remove));
+        adapter.add(new ListPopup.Item(context, R.string.menu_phone_create));
+        adapter.add(new ListPopup.Item(context, R.string.ui_item_contact_hint_message));
 
-        TextView appName = (TextView) v.findViewById(R.id.item_phone_text);
-        String text = context.getString(R.string.ui_item_phone);
-        appName.setText(enrichText(String.format(text, "{" + phonePojo.phone + "}")));
-
-        ((ImageView) v.findViewById(R.id.item_phone_icon)).setColorFilter(getThemeFillColor(context), PorterDuff.Mode.SRC_IN);
-
-        return v;
-    }
-
-    @TargetApi(Build.VERSION_CODES.HONEYCOMB)
-    @Override
-    protected PopupMenu buildPopupMenu(Context context, final RecordAdapter parent, View parentView) {
-        return inflatePopupMenu(R.menu.menu_item_phone, context, parentView);
+        return inflatePopupMenu(adapter, context);
     }
 
     @Override
-    protected Boolean popupMenuClickHandler(Context context, RecordAdapter parent, MenuItem item) {
-        switch (item.getItemId()) {
-            case R.id.item_phone_createcontact:
+    protected boolean popupMenuClickHandler(Context context, RecordAdapter parent, int stringId, View parentView) {
+        switch (stringId) {
+            case R.string.menu_phone_create:
                 // Create a new contact with this phone number
                 Intent createIntent = new Intent(Intent.ACTION_INSERT);
                 createIntent.setType(ContactsContract.Contacts.CONTENT_TYPE);
@@ -57,7 +69,7 @@ public class PhoneResult extends Result {
                 createIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 context.startActivity(createIntent);
                 return true;
-            case R.id.item_phone_sendmessage:
+            case R.string.ui_item_contact_hint_message:
                 String url = "sms:" + phonePojo.phone;
                 Intent messageIntent = new Intent(Intent.ACTION_SENDTO, Uri.parse(url));
                 messageIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -65,22 +77,17 @@ public class PhoneResult extends Result {
                 return true;
         }
 
-        return super.popupMenuClickHandler(context, parent, item);
-    }
-
-    @Override
-    public void doLaunch(Context context, View v) {
-        Intent phone = new Intent(Intent.ACTION_CALL);
-        phone.setData(Uri.parse("tel:" + Uri.encode(phonePojo.phone)));
-
-        phone.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-
-        context.startActivity(phone);
+        return super.popupMenuClickHandler(context, parent, stringId, parentView);
     }
 
     @Override
     public Drawable getDrawable(Context context) {
-        //noinspection deprecation: getDrawable(int, Theme) requires SDK 21+
+        //noinspection: getDrawable(int, Theme) requires SDK 21+
         return context.getResources().getDrawable(android.R.drawable.ic_menu_call);
+    }
+
+    @Override
+    protected void doLaunch(Context context, View v) {
+        launchCall(context, v, phonePojo.phone);
     }
 }

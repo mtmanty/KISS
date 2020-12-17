@@ -1,47 +1,60 @@
 package fr.neamar.kiss.result;
 
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.PorterDuff.Mode;
 import android.graphics.drawable.Drawable;
-import android.text.Html;
-import android.text.TextUtils;
+import android.os.Build;
+import android.preference.PreferenceManager;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
 
 import fr.neamar.kiss.R;
-import fr.neamar.kiss.pojo.SettingsPojo;
+import fr.neamar.kiss.pojo.SettingPojo;
+import fr.neamar.kiss.utils.FuzzyScore;
 
 public class SettingsResult extends Result {
-    private final SettingsPojo settingPojo;
+    private final SettingPojo settingPojo;
 
-    public SettingsResult(SettingsPojo settingPojo) {
-        super();
-        this.pojo = this.settingPojo = settingPojo;
+    SettingsResult(SettingPojo settingPojo) {
+        super(settingPojo);
+        this.settingPojo = settingPojo;
     }
 
+    @NonNull
     @Override
-    public View display(Context context, int position, View v) {
-        if (v == null)
-            v = inflateFromId(context, R.layout.item_setting);
+    public View display(Context context, View view, @NonNull ViewGroup parent, FuzzyScore fuzzyScore) {
+        if (view == null)
+            view = inflateFromId(context, R.layout.item_setting, parent);
 
-        String settingPrefix = "<small><small>" + context.getString(R.string.settings_prefix) + "</small></small>";
-        TextView settingName = (TextView) v.findViewById(R.id.item_setting_name);
-        settingName.setText(TextUtils.concat(Html.fromHtml(settingPrefix), enrichText(settingPojo.displayName)));
+        TextView settingName = view.findViewById(R.id.item_setting_name);
+        displayHighlighted(settingPojo.normalizedName, settingPojo.getName(), fuzzyScore, settingName, context);
 
-        ImageView settingIcon = (ImageView) v.findViewById(R.id.item_setting_icon);
-        settingIcon.setImageDrawable(getDrawable(context));
-        settingIcon.setColorFilter(getThemeFillColor(context), Mode.SRC_IN);
+        ImageView settingIcon = view.findViewById(R.id.item_setting_icon);
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        if (!prefs.getBoolean("icons-hide", false)) {
+            settingIcon.setImageDrawable(getDrawable(context));
+            settingIcon.setColorFilter(getThemeFillColor(context), Mode.SRC_IN);
+        } else {
+            settingIcon.setImageDrawable(null);
+        }
 
-        return v;
+        return view;
     }
 
-    @SuppressWarnings("deprecation")
     @Override
     public Drawable getDrawable(Context context) {
         if (settingPojo.icon != -1) {
-            return context.getResources().getDrawable(settingPojo.icon);
+            Drawable response = context.getResources().getDrawable(settingPojo.icon);
+            response.setColorFilter(getThemeFillColor(context), Mode.SRC_IN);
+            return response;
         }
 
         return null;
@@ -53,7 +66,17 @@ public class SettingsResult extends Result {
         if (!settingPojo.packageName.isEmpty()) {
             intent.setClassName(settingPojo.packageName, settingPojo.settingName);
         }
+        if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+            intent.setSourceBounds(v.getClipBounds());
+        }
+
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        context.startActivity(intent);
+
+        try {
+            context.startActivity(intent);
+        } catch (ActivityNotFoundException e) {
+            e.printStackTrace();
+            Toast.makeText(context, R.string.application_not_found, Toast.LENGTH_LONG).show();
+        }
     }
 }

@@ -1,76 +1,75 @@
 package fr.neamar.kiss.dataprovider;
 
-import java.util.ArrayList;
+import android.widget.Toast;
 
+import fr.neamar.kiss.R;
 import fr.neamar.kiss.loader.LoadShortcutsPojos;
+import fr.neamar.kiss.normalizer.StringNormalizer;
 import fr.neamar.kiss.pojo.Pojo;
-import fr.neamar.kiss.pojo.ShortcutsPojo;
+import fr.neamar.kiss.pojo.ShortcutPojo;
+import fr.neamar.kiss.searcher.Searcher;
+import fr.neamar.kiss.utils.FuzzyScore;
 
-public class ShortcutsProvider extends Provider<ShortcutsPojo> {
+public class ShortcutsProvider extends Provider<ShortcutPojo> {
+    private static boolean notifiedKissNotDefaultLauncher = false;
 
     @Override
     public void reload() {
-        this.initialize(new LoadShortcutsPojos(this));
+        super.reload();
+        // If the user tries to add a new shortcut, but KISS isn't the default launcher
+        // AND the services are not running (low memory), then we won't be able to
+        // spawn a new service on Android 8.1+.
+
+        try {
+            this.initialize(new LoadShortcutsPojos(this));
+        }
+        catch(IllegalStateException e) {
+            if(!notifiedKissNotDefaultLauncher) {
+                // Only display this message once per process
+                Toast.makeText(this, R.string.unable_to_initialize_shortcuts, Toast.LENGTH_LONG).show();
+            }
+            notifiedKissNotDefaultLauncher = true;
+            e.printStackTrace();
+        }
     }
 
     @Override
-    public ArrayList<Pojo> getResults(String query) {
-        ArrayList<Pojo> results = new ArrayList<>();
+    public void requestResults(String query, Searcher searcher) {
+        StringNormalizer.Result queryNormalized = StringNormalizer.normalizeWithResult(query, false);
 
-        int relevance;
-        int matchPositionStart;
-        int matchPositionEnd;
-        String shortcutNameLowerCased;
-        
-        final String queryWithSpace = " " + query;
-        for (ShortcutsPojo shortcut : pojos) {
-            relevance = 0;
-            shortcutNameLowerCased = shortcut.nameNormalized;
-            
-            matchPositionEnd = 0;
-            if (shortcutNameLowerCased.startsWith(query)) {
-                relevance = 75;
-                matchPositionStart = 0;
-                matchPositionEnd   = query.length();
-            }
-            else if ((matchPositionStart = shortcutNameLowerCased.indexOf(queryWithSpace)) > -1) {
-                relevance = 50;
-                matchPositionEnd = matchPositionStart + queryWithSpace.length();
-            }
-            else if ((matchPositionStart = shortcutNameLowerCased.indexOf(query)) > -1) {
-                relevance = 1;
-                matchPositionEnd = matchPositionStart + query.length();
-            }
-            
-            if (relevance > 0) {
-                shortcut.setDisplayNameHighlightRegion(matchPositionStart, matchPositionEnd);
-                shortcut.relevance = relevance;
-                results.add(shortcut);
-            }
+        if (queryNormalized.codePoints.length == 0) {
+            return;
         }
 
-        return results;
-    }
+        FuzzyScore fuzzyScore = new FuzzyScore(queryNormalized.codePoints);
+        FuzzyScore.MatchInfo matchInfo;
+        boolean match;
 
-    public Pojo findById(String id) {
-        
-        for (Pojo pojo : pojos) {
-            if (pojo.id.equals(id)) {
-                pojo.displayName = pojo.name;
-                return pojo;
+        for (ShortcutPojo pojo : pojos) {
+            matchInfo = fuzzyScore.match(pojo.normalizedName.codePoints);
+            match = matchInfo.match;
+            pojo.relevance = matchInfo.score;
+
+            // check relevance for tags
+            if (pojo.getNormalizedTags() != null) {
+                matchInfo = fuzzyScore.match(pojo.getNormalizedTags().codePoints);
+                if (matchInfo.match && (!match || matchInfo.score > pojo.relevance)) {
+                    match = true;
+                    pojo.relevance = matchInfo.score;
+                }
+            }
+
+            if (match && !searcher.addResult(pojo)) {
+                return;
             }
         }
-
-        return null;
     }
-    
+
     public Pojo findByName(String name) {
         for (Pojo pojo : pojos) {
-            if (pojo.name.equals(name))
+            if (pojo.getName().equals(name))
                 return pojo;
         }
         return null;
     }
-
-
 }

@@ -17,12 +17,20 @@ public class ResetFavoritesPreference extends DialogPreference {
     }
 
     @Override
+    @SuppressWarnings("CatchAndPrintStackTrace")
     public void onClick(DialogInterface dialog, int which) {
         super.onClick(dialog, which);
         if (which == DialogInterface.BUTTON_POSITIVE) {
             PreferenceManager.getDefaultSharedPreferences(getContext()).edit()
-                    .putString("favorite-apps-list", "").commit();
-            KissApplication.getDataHandler(getContext()).getAppProvider().reload();
+                    .putString("favorite-apps-list", "").apply();
+
+            try {
+                KissApplication.getApplication(getContext()).getDataHandler().getAppProvider().reload();
+            }
+            catch(NullPointerException e) {
+                e.printStackTrace();
+            }
+
             Toast.makeText(getContext(), R.string.favorites_erased, Toast.LENGTH_LONG).show();
         }
 

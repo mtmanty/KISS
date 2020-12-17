@@ -2,9 +2,6 @@ package fr.neamar.kiss.ui;
 
 import android.animation.Animator;
 import android.animation.ValueAnimator;
-import android.annotation.TargetApi;
-import android.os.Build;
-import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -17,28 +14,25 @@ import android.view.animation.AccelerateInterpolator;
 public class KeyboardScrollHider implements View.OnTouchListener {
     private final static int THRESHOLD = 24;
 
-    private KeyboardHandler      handler;
-    private BlockableListView    list;
-    private View                 listParent;
-    private BottomPullEffectView pullEffect;
+    private final KeyboardHandler handler;
+    private final BlockableListView list;
+    private final View listParent;
+    private final BottomPullEffectView pullEffect;
     private int listHeightInitial = 0;
 
-    private float offsetYStart   = 0;
+    private float offsetYStart = 0;
     private float offsetYCurrent = 0;
-    private int   offsetYDiff    = 0;
+    private int offsetYDiff = 0;
 
     private MotionEvent lastMotionEvent;
     private int initialWindowPadding = 0;
     private boolean resizeDone = false;
 
-    public interface KeyboardHandler {
-        void showKeyboard();
-        void hideKeyboard();
-    }
+    private boolean scrollBarEnabled = true;
 
     public KeyboardScrollHider(KeyboardHandler handler, BlockableListView list, BottomPullEffectView pullEffect) {
-        this.handler    = handler;
-        this.list       = list;
+        this.handler = handler;
+        this.list = list;
         this.listParent = (View) list.getParent();
         this.pullEffect = pullEffect;
     }
@@ -78,7 +72,7 @@ public class KeyboardScrollHider implements View.OnTouchListener {
     }
 
     private void handleResizeDone() {
-        if(this.resizeDone) {
+        if (this.resizeDone) {
             return;
         }
 
@@ -89,7 +83,7 @@ public class KeyboardScrollHider implements View.OnTouchListener {
         this.pullEffect.releasePull();
 
         // Make sure list uses the height of it's parent
-        this.list.setVerticalScrollBarEnabled(true);
+        this.list.setVerticalScrollBarEnabled(this.scrollBarEnabled);
         this.setListLayoutHeight(ViewGroup.LayoutParams.MATCH_PARENT);
 
         this.resizeDone = true;
@@ -97,7 +91,7 @@ public class KeyboardScrollHider implements View.OnTouchListener {
 
     private void updateListViewHeight() {
         // Don't do anything if the window hasn't resized yet or if we're already done
-        if(this.getWindowPadding() >= this.initialWindowPadding || this.resizeDone) {
+        if (this.getWindowPadding() >= this.initialWindowPadding || this.resizeDone) {
             return;
         }
 
@@ -106,24 +100,24 @@ public class KeyboardScrollHider implements View.OnTouchListener {
         this.list.setVerticalScrollBarEnabled(false);
 
         int heightContainer = this.listParent.getHeight();
-        int offsetYDiff     = (int)(this.offsetYCurrent - this.offsetYStart);
-        if(offsetYDiff < (this.offsetYDiff - THRESHOLD)) {
-            double pullFeedback = Math.sqrt((double)(this.offsetYDiff-offsetYDiff) / THRESHOLD);
-            offsetYDiff = this.offsetYDiff - (int)(THRESHOLD * pullFeedback);
+        int offsetYDiff = (int) (this.offsetYCurrent - this.offsetYStart);
+        if (offsetYDiff < (this.offsetYDiff - THRESHOLD)) {
+            double pullFeedback = Math.sqrt((double) (this.offsetYDiff - offsetYDiff) / THRESHOLD);
+            offsetYDiff = this.offsetYDiff - (int) (THRESHOLD * pullFeedback);
         }
 
         // Determine new size of list view widget within its container
         int listLayoutHeight = ViewGroup.LayoutParams.MATCH_PARENT;
-        if((this.listHeightInitial + offsetYDiff) < heightContainer) {
+        if ((this.listHeightInitial + offsetYDiff) < heightContainer) {
             listLayoutHeight = this.listHeightInitial + offsetYDiff;
         }
         this.setListLayoutHeight(listLayoutHeight);
-        if(offsetYDiff > this.offsetYDiff) {
+        if (offsetYDiff > this.offsetYDiff) {
             this.offsetYDiff = offsetYDiff;
         }
 
-        if(this.getWindowPadding() < this.initialWindowPadding
-        && listLayoutHeight       == ViewGroup.LayoutParams.MATCH_PARENT) {
+        if (this.getWindowPadding() < this.initialWindowPadding
+                && listLayoutHeight == ViewGroup.LayoutParams.MATCH_PARENT) {
             // Window size has increased and view has reached it's new maximum size - we're done
             this.handleResizeDone();
             return;
@@ -131,90 +125,108 @@ public class KeyboardScrollHider implements View.OnTouchListener {
 
         // Display edge pulling effect while list view is detached from the bottom of its
         // container
-        float distance     = ((float) (heightContainer - listLayoutHeight)) / heightContainer;
+        float distance = ((float) (heightContainer - listLayoutHeight)) / heightContainer;
         float displacement = 1 - this.lastMotionEvent.getX() / getWindowWidth();
         this.pullEffect.setPull(distance, displacement, false);
     }
 
     @Override
     public boolean onTouch(View v, MotionEvent event) {
-        switch(event.getActionMasked()) {
+        this.scrollBarEnabled = this.list.isVerticalScrollBarEnabled();
+        switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
-                this.offsetYStart   = event.getY();
+                this.offsetYStart = event.getY();
                 this.offsetYCurrent = event.getY();
-                this.offsetYDiff    = 0;
+                this.offsetYDiff = 0;
 
-                this.lastMotionEvent      = event;
-                this.resizeDone           = false;
+                this.lastMotionEvent = event;
+                this.resizeDone = false;
                 this.initialWindowPadding = this.getWindowPadding();
 
                 // Lock list view height to its current value
                 this.listHeightInitial = this.list.getHeight();
                 this.setListLayoutHeight(this.listHeightInitial);
-            break;
+                break;
 
             case MotionEvent.ACTION_MOVE:
-                this.offsetYCurrent  = event.getY();
+                this.offsetYCurrent = event.getY();
                 this.lastMotionEvent = event;
 
                 this.updateListViewHeight();
-            break;
+                break;
 
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 this.lastMotionEvent = null;
 
-                if(!this.resizeDone) {
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.HONEYCOMB) {
-                        ValueAnimator animator = ValueAnimator.ofInt(
-                                this.list.getHeight(),
-                                this.listParent.getHeight()
-                        );
-                        animator.setDuration(250);
-                        animator.setInterpolator(new AccelerateInterpolator());
-                        animator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                            @TargetApi(Build.VERSION_CODES.HONEYCOMB)
-                            @Override
-                            public void onAnimationUpdate(ValueAnimator animator) {
-                                int height = (int)(animator.getAnimatedValue());
-                                KeyboardScrollHider.this.setListLayoutHeight(height);
-                            }
-                        });
-                        animator.addListener(new Animator.AnimatorListener() {
-                            @Override
-                            public void onAnimationStart(Animator animation) {
-                                // Give the list view the control over it's input back
-                                KeyboardScrollHider.this.list.unblockTouchEvents();
+                if (!this.resizeDone) {
+                    ValueAnimator animator = ValueAnimator.ofInt(
+                            this.list.getHeight(),
+                            this.listParent.getHeight()
+                    );
+                    animator.setDuration(250);
+                    animator.setInterpolator(new AccelerateInterpolator());
+                    animator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                        @Override
+                        public void onAnimationUpdate(ValueAnimator animator) {
+                            int height = (int) animator.getAnimatedValue();
+                            KeyboardScrollHider.this.setListLayoutHeight(height);
+                        }
+                    });
+                    animator.addListener(new Animator.AnimatorListener() {
+                        @Override
+                        public void onAnimationStart(Animator animation) {
+                            // Give the list view the control over it's input back
+                            KeyboardScrollHider.this.list.unblockTouchEvents();
 
-                                // Quickly fade out edge pull effect
-                                KeyboardScrollHider.this.pullEffect.releasePull();
-                            }
+                            // Quickly fade out edge pull effect
+                            KeyboardScrollHider.this.pullEffect.releasePull();
+                        }
 
-                            @Override
-                            public void onAnimationEnd(Animator animation) {
-                                KeyboardScrollHider.this.handleResizeDone();
-                            }
+                        @Override
+                        public void onAnimationEnd(Animator animation) {
+                            KeyboardScrollHider.this.handleResizeDone();
+                        }
 
-                            @Override
-                            public void onAnimationCancel(Animator animation) {}
+                        @Override
+                        public void onAnimationCancel(Animator animation) {
+                        }
 
-                            @Override
-                            public void onAnimationRepeat(Animator animation) {}
-                        });
-                        animator.start();
-                    } else {
-                        this.handleResizeDone();
-                    }
+                        @Override
+                        public void onAnimationRepeat(Animator animation) {
+                        }
+                    });
+                    animator.start();
+                } else {
+                    this.handleResizeDone();
                 }
 
-            break;
+                break;
         }
 
         // Hide the keyboard if the user has scrolled down by about half a result item
-        if((this.offsetYCurrent - this.offsetYStart) > THRESHOLD) {
+        if ((this.offsetYCurrent - this.offsetYStart) > THRESHOLD) {
             this.handler.hideKeyboard();
+            this.handler.applyScrollSystemUi();
         }
 
         return false;
+    }
+
+    public void fixScroll() {
+        this.list.post(new Runnable() {
+            @Override
+            public void run() {
+                resizeDone = false;
+                handleResizeDone();
+            }
+        });
+    }
+
+    public interface KeyboardHandler {
+        void showKeyboard();
+        void hideKeyboard();
+
+        void applyScrollSystemUi();
     }
 }

@@ -1,77 +1,173 @@
 package fr.neamar.kiss.result;
 
-import android.annotation.TargetApi;
 import android.app.SearchManager;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.PorterDuff;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
-import android.os.Build;
+import android.preference.PreferenceManager;
+import android.util.Log;
+import android.util.Pair;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ArrayAdapter;
 import android.widget.ImageView;
-import android.widget.PopupMenu;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
+
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
+import java.util.Collections;
 
 import fr.neamar.kiss.R;
 import fr.neamar.kiss.adapter.RecordAdapter;
 import fr.neamar.kiss.pojo.SearchPojo;
+import fr.neamar.kiss.ui.ListPopup;
+import fr.neamar.kiss.utils.ClipboardUtils;
+import fr.neamar.kiss.utils.FuzzyScore;
 
 public class SearchResult extends Result {
     private final SearchPojo searchPojo;
 
-    public SearchResult(SearchPojo searchPojo) {
-        super();
-        this.pojo = this.searchPojo = searchPojo;
+    SearchResult(SearchPojo searchPojo) {
+        super(searchPojo);
+        this.searchPojo = searchPojo;
     }
 
+    @NonNull
     @Override
-    public View display(Context context, int position, View v) {
-        if (v == null)
-            v = inflateFromId(context, R.layout.item_search);
+    public View display(Context context, View view, @NonNull ViewGroup parent, FuzzyScore fuzzyScore) {
+        if (view == null)
+            view = inflateFromId(context, R.layout.item_search, parent);
 
-        TextView appName = (TextView) v.findViewById(R.id.item_search_text);
-        String text = this.pojo.name + " " + context.getString(R.string.ui_item_search);
-        appName.setText(enrichText(String.format(text, "{" + searchPojo.query + "}")));
+        TextView searchText = view.findViewById(R.id.item_search_text);
+        ImageView image = view.findViewById(R.id.item_search_icon);
+        boolean hasCustomIcon = false;
+        String text;
+        int pos;
+        int len;
 
-        ((ImageView) v.findViewById(R.id.item_search_icon)).setColorFilter(getThemeFillColor(context), PorterDuff.Mode.SRC_IN);
-        return v;
+        if (searchPojo.type == SearchPojo.URL_QUERY) {
+            text = String.format(context.getString(R.string.ui_item_visit), this.pojo.getName());
+            pos = text.indexOf(this.pojo.getName());
+            len = this.pojo.getName().length();
+            image.setImageResource(R.drawable.ic_public);
+        } else if (searchPojo.type == SearchPojo.SEARCH_QUERY) {
+            text = String.format(context.getString(R.string.ui_item_search), this.pojo.getName(), searchPojo.query);
+            pos = text.indexOf(searchPojo.query);
+            len = searchPojo.query.length();
+            image.setImageResource(R.drawable.search);
+            SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+            boolean hideIcons = prefs.getBoolean("icons-hide", false);
+                if(isGoogleSearch() && !hideIcons) {
+                try {
+                    Drawable icon = context.getPackageManager().getApplicationIcon("com.google.android.googlequicksearchbox");
+                    image.setImageDrawable(icon);
+                    hasCustomIcon = true;
+                } catch (PackageManager.NameNotFoundException e) {
+                    // Keep default
+                }
+            }
+            if(isDuckDuckGo() && !hideIcons) {
+                try {
+                    Drawable icon = context.getPackageManager().getApplicationIcon("com.duckduckgo.mobile.android");
+                    image.setImageDrawable(icon);
+                    hasCustomIcon = true;
+                } catch (PackageManager.NameNotFoundException e) {
+                    // Keep default
+                }
+
+            }
+        } else if (searchPojo.type == SearchPojo.CALCULATOR_QUERY) {
+            text = searchPojo.query;
+            pos = text.indexOf("=");
+            len = text.length() - pos;
+            image.setImageResource(R.drawable.ic_functions);
+        } else {
+            throw new IllegalArgumentException();
+        }
+
+        displayHighlighted(text, Collections.singletonList(new Pair<>(pos, pos + len)), searchText, context);
+
+        if(!hasCustomIcon) {
+            image.setColorFilter(getThemeFillColor(context), PorterDuff.Mode.SRC_IN);
+        }
+        return view;
     }
 
-    @TargetApi(Build.VERSION_CODES.HONEYCOMB)
     @Override
     public void doLaunch(Context context, View v) {
-        boolean exceptionThrown = false;
-        Intent search = new Intent(Intent.ACTION_WEB_SEARCH);
-        search.putExtra(SearchManager.QUERY, searchPojo.query);
-        if (pojo.name.equals("Google")) {
-            if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB) {
-                // In the latest Google Now version, ACTION_WEB_SEARCH is broken when used with FLAG_ACTIVITY_NEW_TASK.
-                // Adding FLAG_ACTIVITY_CLEAR_TASK seems to fix the problem.
-                search.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
-            }
-            search.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-
-            try {
-                context.startActivity(search);
-            } catch (ActivityNotFoundException e) {
-                // This exception gets thrown if Google Search has been deactivated:
-                exceptionThrown = true;
-            }
-        }
-        if (exceptionThrown || !pojo.name.equals("Google")) {
-            Uri uri = Uri.parse(searchPojo.url + searchPojo.query);
-            search = new Intent(Intent.ACTION_VIEW, uri);
-            search.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            context.startActivity(search);
+        switch (searchPojo.type) {
+            case SearchPojo.URL_QUERY:
+            case SearchPojo.SEARCH_QUERY:
+                if (isGoogleSearch()) {
+                    try {
+                        Intent intent = new Intent(Intent.ACTION_WEB_SEARCH);
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        intent.putExtra(SearchManager.QUERY, searchPojo.query); // query contains search string
+                        context.startActivity(intent);
+                        break;
+                    } catch (ActivityNotFoundException e) {
+                        // Google app not found, fall back to default method
+                    }
+                }
+                String query;
+                try {
+                    query = URLEncoder.encode(searchPojo.query, "UTF-8");
+                } catch (UnsupportedEncodingException e) {
+                    query = URLEncoder.encode(searchPojo.query);
+                }
+                String urlWithQuery = searchPojo.url.replaceAll("%s|\\{q\\}", query);
+                Uri uri = Uri.parse(urlWithQuery);
+                Intent search = new Intent(Intent.ACTION_VIEW, uri);
+                search.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                try {
+                    context.startActivity(search);
+                } catch (android.content.ActivityNotFoundException e) {
+                    Log.w("SearchResult", "Unable to run search for url: " + searchPojo.url);
+                }
+                break;
+            case SearchPojo.CALCULATOR_QUERY:
+                ClipboardUtils.setClipboard(context, searchPojo.query.substring(searchPojo.query.indexOf("=") + 2));
+                Toast.makeText(context, R.string.copy_confirmation, Toast.LENGTH_SHORT).show();
+                break;
         }
     }
 
-    @TargetApi(Build.VERSION_CODES.HONEYCOMB)
     @Override
-    protected PopupMenu buildPopupMenu(Context context, final RecordAdapter parent, View parentView) {
+    protected ListPopup buildPopupMenu(Context context, ArrayAdapter<ListPopup.Item> adapter, final RecordAdapter parent, View parentView) {
+        adapter.add(new ListPopup.Item(context, R.string.share));
 
-        // Empty menu so that you don't add on favorites
-        return new PopupMenu(context, parentView);
+        return inflatePopupMenu(adapter, context);
+    }
+
+    @Override
+    protected boolean popupMenuClickHandler(Context context, RecordAdapter parent, int stringId, View parentView) {
+        switch (stringId) {
+            case R.string.share:
+                Intent shareIntent = new Intent();
+                shareIntent.setAction(Intent.ACTION_SEND);
+                shareIntent.putExtra(Intent.EXTRA_TEXT, searchPojo.query);
+                shareIntent.setType("text/plain");
+                shareIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(shareIntent);
+                return true;
+        }
+
+        return super.popupMenuClickHandler(context, parent, stringId, parentView);
+    }
+
+    private boolean isGoogleSearch() {
+        return searchPojo.url.startsWith("https://encrypted.google.com");
+    }
+
+    private boolean isDuckDuckGo() {
+        return searchPojo.url.startsWith("https://start.duckduckgo.com");
     }
 }

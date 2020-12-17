@@ -6,30 +6,32 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
-import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.ResolveInfo;
-import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.Bitmap.CompressFormat;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
-import android.graphics.Paint;
-import android.graphics.PorterDuff;
-import android.graphics.PorterDuffXfermode;
+import android.graphics.Path;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.preference.PreferenceManager;
 import android.util.Log;
 
-import org.xmlpull.v1.XmlPullParser;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Random;
+
+import fr.neamar.kiss.icons.IconPack;
+import fr.neamar.kiss.icons.IconPackXML;
+import fr.neamar.kiss.icons.SystemIconPack;
+import fr.neamar.kiss.result.AppResult;
+import fr.neamar.kiss.utils.DrawableUtils;
+import fr.neamar.kiss.utils.UserHandle;
 
 /**
  * Inspired from http://stackoverflow.com/questions/31490630/how-to-load-icon-from-icon-pack
@@ -37,32 +39,25 @@ import java.util.Random;
 
 public class IconsHandler {
 
-    // map with available icons packs
-    private HashMap<String, String> iconsPacks = new HashMap<>();
-    // map with available drawable for an icons pack
-    private HashMap<String, String> packagesDrawables = new HashMap<>();
-    // instance of a resource object of an icon pack
-    private Resources iconPackres;
-    // package name of the icons pack
-    private String iconsPackPackageName;
-    // list of back images available on an icons pack
-    private List<Bitmap> backImages = new ArrayList<>();
-    // bitmap mask of an icons pack
-    private Bitmap maskImage = null;
-    // front image of an icons pack
-    private Bitmap frontImage = null;
-    // scale factor of an icons pack
-    private float factor = 1.0f;
-
-    private PackageManager pm;
-    private Context ctx;
-
     private static final String TAG = "IconsHandler";
+    // map with available icons packs
+    private final HashMap<String, String> iconsPacks = new HashMap<>();
+
+    private final PackageManager pm;
+    private final Context ctx;
+    private IconPackXML mIconPack = null;
+    private SystemIconPack mSystemPack = new SystemIconPack();
+    private boolean mForceAdaptive = false;
+    private boolean mContactPackMask = false;
+    private int mContactsShape = DrawableUtils.SHAPE_SYSTEM;
+    private boolean mForceShape = false;
+
 
     public IconsHandler(Context ctx) {
         super();
         this.ctx = ctx;
         this.pm = ctx.getPackageManager();
+        clearOldCache();
         loadAvailableIconsPacks();
         loadIconsPack();
     }
@@ -70,11 +65,37 @@ public class IconsHandler {
     /**
      * Load configured icons pack
      */
-    public void loadIconsPack() {
+    private void loadIconsPack() {
 
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(ctx);
-        loadIconsPack(prefs.getString("icons-pack", "default"));
+        onPrefChanged(prefs);
+        
+    }
 
+    /**
+     * Set values from preferences
+     */
+    public void onPrefChanged(SharedPreferences pref) {
+        loadIconsPack(pref.getString("icons-pack", null));
+        mSystemPack.setAdaptiveShape(getAdaptiveShape(pref, "adaptive-shape"));
+        mForceAdaptive = pref.getBoolean("force-adaptive", true);
+        mForceShape = pref.getBoolean("force-shape", true);
+
+        mContactPackMask = pref.getBoolean("contact-pack-mask", true);
+        mContactsShape = getAdaptiveShape(pref, "contacts-shape");
+
+        //mShortcutPackMask = pref.getBoolean("shortcut-pack-mask", true);
+        //mShortcutsShape = getAdaptiveShape(pref, "shortcut-shape");
+
+        //mShortcutBadgePackMask = pref.getBoolean("shortcut-pack-badge-mask", true);
+    }
+
+    private static int getAdaptiveShape(SharedPreferences pref, String key) {
+        try {
+            return Integer.parseInt(pref.getString(key, null));
+        } catch (Exception ignored) {
+        }
+        return DrawableUtils.SHAPE_SYSTEM;
     }
 
     /**
@@ -82,187 +103,96 @@ public class IconsHandler {
      *
      * @param packageName Android package ID of the package to parse
      */
-    public void loadIconsPack(String packageName) {
+    void loadIconsPack(String packageName) {
 
         //clear icons pack
-        iconsPackPackageName = packageName;
-        packagesDrawables.clear();
-        backImages.clear();
+        mIconPack = null;
         cacheClear();
 
         // system icons, nothing to do
-        if (iconsPackPackageName.equalsIgnoreCase("default")) {
+        if (packageName == null || packageName.equalsIgnoreCase("default")) {
             return;
         }
 
-        XmlPullParser xpp = null;
-
-        try {
-            // search appfilter.xml into icons pack apk resource folder
-            iconPackres = pm.getResourcesForApplication(iconsPackPackageName);
-            int appfilterid = iconPackres.getIdentifier("appfilter", "xml", iconsPackPackageName);
-            if (appfilterid > 0) {
-                xpp = iconPackres.getXml(appfilterid);
-            }
-
-            if (xpp != null) {
-                int eventType = xpp.getEventType();
-                while (eventType != XmlPullParser.END_DOCUMENT) {
-                    if (eventType == XmlPullParser.START_TAG) {
-                        //parse <iconback> xml tags used as backgroud of generated icons
-                        if (xpp.getName().equals("iconback")) {
-                            for (int i = 0; i < xpp.getAttributeCount(); i++) {
-                                if (xpp.getAttributeName(i).startsWith("img")) {
-                                    String drawableName = xpp.getAttributeValue(i);
-                                    Bitmap iconback = loadBitmap(drawableName);
-                                    if (iconback != null) {
-                                        backImages.add(iconback);
-                                    }
-                                }
-                            }
-                        }
-                        //parse <iconmask> xml tags used as mask of generated icons
-                        else if (xpp.getName().equals("iconmask")) {
-                            if (xpp.getAttributeCount() > 0 && xpp.getAttributeName(0).equals("img1")) {
-                                String drawableName = xpp.getAttributeValue(0);
-                                maskImage = loadBitmap(drawableName);
-                            }
-                        }
-                        //parse <iconupon> xml tags used as front image of generated icons
-                        else if (xpp.getName().equals("iconupon")) {
-                            if (xpp.getAttributeCount() > 0 && xpp.getAttributeName(0).equals("img1")) {
-                                String drawableName = xpp.getAttributeValue(0);
-                                frontImage = loadBitmap(drawableName);
-                            }
-                        }
-                        //parse <scale> xml tags used as scale factor of original bitmap icon
-                        else if (xpp.getName().equals("scale")) {
-                            if (xpp.getAttributeCount() > 0 && xpp.getAttributeName(0).equals("factor")) {
-                                factor = Float.valueOf(xpp.getAttributeValue(0));
-                            }
-                        }
-                        //parse <item> xml tags for custom icons
-                        if (xpp.getName().equals("item")) {
-                            String componentName = null;
-                            String drawableName = null;
-
-                            for (int i = 0; i < xpp.getAttributeCount(); i++) {
-                                if (xpp.getAttributeName(i).equals("component")) {
-                                    componentName = xpp.getAttributeValue(i);
-                                } else if (xpp.getAttributeName(i).equals("drawable")) {
-                                    drawableName = xpp.getAttributeValue(i);
-                                }
-                            }
-                            if (!packagesDrawables.containsKey(componentName)) {
-                                packagesDrawables.put(componentName, drawableName);
-                            }
-                        }
-                    }
-                    eventType = xpp.next();
-                }
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error parsing appfilter.xml " + e);
-        }
-
+        mIconPack = new IconPackXML(packageName);
+        mIconPack.load(ctx.getPackageManager());
     }
 
-    private Bitmap loadBitmap(String drawableName) {
-        int id = iconPackres.getIdentifier(drawableName, "drawable", iconsPackPackageName);
-        if (id > 0) {
-            //noinspection deprecation: Resources.getDrawable(int, Theme) requires SDK 21+
-            Drawable bitmap = iconPackres.getDrawable(id);
-            if (bitmap instanceof BitmapDrawable) {
-                return ((BitmapDrawable) bitmap).getBitmap();
-            }
-        }
-        return null;
-    }
 
     /**
      * Get or generate icon for an app
      */
-    public Drawable getDrawableIconForPackage(ComponentName componentName) {
-        try {
-            // system icons, nothing to do
-            if (iconsPackPackageName.equalsIgnoreCase("default")) {
-                return pm.getActivityIcon(componentName);
-            }
+    @SuppressWarnings("CatchAndPrintStackTrace")
+    public Drawable getDrawableIconForPackage(ComponentName componentName, UserHandle userHandle) {
+        final String componentString = componentName.toString();
 
-            String drawable = packagesDrawables.get(componentName.toString());
-            if (drawable != null) { //there is a custom icon
-                int id = iconPackres.getIdentifier(drawable, "drawable", iconsPackPackageName);
-                if (id > 0) {
-                    //noinspection deprecation: Resources.getDrawable(int, Theme) requires SDK 21+
-                    return iconPackres.getDrawable(id);
-                }
-            }
-
-            //search first in cache
-            Drawable systemIcon = cacheGetDrawable(componentName.toString());
-            if (systemIcon != null)
-                return systemIcon;
-
-            systemIcon = pm.getActivityIcon(componentName);
-            if (systemIcon instanceof BitmapDrawable) {
-                Drawable generated = generateBitmap(systemIcon);
-                cacheStoreDrawable(componentName.toString(), generated);
-                return generated;
-            }
-            return systemIcon;
-
-        } catch (NameNotFoundException e) {
-            Log.e(TAG, "Unable to found component " + componentName.toString() + e);
-            return null;
+        // Search in cache
+        {
+            Drawable cacheIcon = cacheGetDrawable(componentString);
+            if (cacheIcon != null)
+                return cacheIcon;
         }
+
+        // check the icon pack for a resource
+        if (mIconPack != null) {
+            // just checking will make this thread wait for the icon pack to load
+            if (!mIconPack.isLoaded())
+                return null;
+            Drawable iconPackDrawable = mIconPack.getComponentDrawable(componentString);
+            if (iconPackDrawable != null) {
+                Drawable drawable;
+
+                if (DrawableUtils.isAdaptiveIconDrawable(iconPackDrawable) || mForceAdaptive) {
+                    int shape = mSystemPack.getAdaptiveShape();
+                    drawable = DrawableUtils.applyIconMaskShape(ctx, iconPackDrawable, shape, true);
+                } else
+                    drawable = mIconPack.applyBackgroundAndMask(ctx, iconPackDrawable, false);
+                storeDrawable(cacheGetFileName(componentString), drawable);
+                return drawable;
+            }
+        }
+
+        // if icon pack doesn't have the drawable, use system drawable
+        Drawable systemIcon = mSystemPack.getComponentDrawable(ctx, componentName, userHandle);
+        if (systemIcon == null)
+            return null;
+
+        // if the icon pack has a mask, use that instead of the adaptive shape
+        if (mIconPack != null && mIconPack.hasMask()) {
+            Drawable drawable = mIconPack.applyBackgroundAndMask(ctx, systemIcon, false);
+            storeDrawable(cacheGetFileName(componentString), drawable);
+            return drawable;
+        }
+
+        Drawable drawable;
+        // use adaptive shape
+        if (DrawableUtils.isAdaptiveIconDrawable(systemIcon) || mForceAdaptive)
+            drawable = mSystemPack.applyBackgroundAndMask(ctx, systemIcon, true);
+        else if (mForceShape)
+            drawable = mSystemPack.applyBackgroundAndMask(ctx, systemIcon, false);
+        else
+            drawable = systemIcon;
+
+        storeDrawable(cacheGetFileName(componentString), drawable);
+        return drawable;
     }
 
-    private Drawable generateBitmap(Drawable defaultBitmap) {
-
-        // if no support images in the icon pack return the bitmap itself
-        if (backImages.size() == 0) {
-            return defaultBitmap;
-        }
-
-        // select a random background image
-        Random r = new Random();
-        int backImageInd = r.nextInt(backImages.size());
-        Bitmap backImage = backImages.get(backImageInd);
-        int w = backImage.getWidth();
-        int h = backImage.getHeight();
-
-        // create a bitmap for the result
-        Bitmap result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(result);
-
-        // draw the background first
-        canvas.drawBitmap(backImage, 0, 0, null);
-
-        // scale original icon
-        Bitmap scaledBitmap = Bitmap.createScaledBitmap(((BitmapDrawable) defaultBitmap).getBitmap(), (int) (w * factor), (int) (h * factor), false);
-
-        if (maskImage != null) {
-            // draw the scaled bitmap with mask
-            Bitmap mutableMask = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-            Canvas maskCanvas = new Canvas(mutableMask);
-            maskCanvas.drawBitmap(maskImage, 0, 0, new Paint());
-
-            // paint the bitmap with mask into the result
-            Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-            paint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_OUT));
-            canvas.drawBitmap(scaledBitmap, (w - scaledBitmap.getWidth()) / 2, (h - scaledBitmap.getHeight()) / 2, null);
-            canvas.drawBitmap(mutableMask, 0, 0, paint);
-            paint.setXfermode(null);
-        } else { // draw the scaled bitmap without mask        
-            canvas.drawBitmap(scaledBitmap, (w - scaledBitmap.getWidth()) / 2, (h - scaledBitmap.getHeight()) / 2, null);
-        }
-
-        // paint the front
-        if (frontImage != null) {
-            canvas.drawBitmap(frontImage, 0, 0, null);
-        }
-
-        return new BitmapDrawable(iconPackres, result);
+    public Drawable applyContactMask(@NonNull Context ctx, @NonNull Drawable drawable) {
+        if (!mContactPackMask)
+            return DrawableUtils.applyIconMaskShape(ctx, drawable, mContactsShape, false);
+        if (mIconPack != null && mIconPack.hasMask())
+            return mIconPack.applyBackgroundAndMask(ctx, drawable, false);
+        // if pack has no mask, make it a circle
+        int size = ctx.getResources().getDimensionPixelSize(R.dimen.result_icon_size);
+        Bitmap b = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(b);
+        Path path = new Path();
+        int h = size / 2;
+        path.addCircle(h, h, h, Path.Direction.CCW);
+        c.clipPath(path);
+        drawable.setBounds(0, 0, c.getWidth(), c.getHeight());
+        drawable.draw(c);
+        return new BitmapDrawable(ctx.getResources(), b);
     }
 
     /**
@@ -288,8 +218,23 @@ public class IconsHandler {
         }
     }
 
-    public HashMap<String, String> getIconsPacks() {
+    HashMap<String, String> getIconsPacks() {
         return iconsPacks;
+    }
+
+    @Nullable
+    public IconPackXML getCustomIconPack() {
+        return mIconPack;
+    }
+
+    @NonNull
+    public SystemIconPack getSystemIconPack() {
+        return mSystemPack;
+    }
+
+    @NonNull
+    public IconPack getIconPack() {
+        return mIconPack != null ? mIconPack : mSystemPack;
     }
 
     private boolean isDrawableInCache(String key) {
@@ -297,21 +242,18 @@ public class IconsHandler {
         return drawableFile.isFile();
     }
 
-    private boolean cacheStoreDrawable(String key, Drawable drawable) {
+    private void storeDrawable(File drawableFile, Drawable drawable) {
         if (drawable instanceof BitmapDrawable) {
-            File drawableFile = cacheGetFileName(key);
             FileOutputStream fos;
             try {
                 fos = new FileOutputStream(drawableFile);
                 ((BitmapDrawable) drawable).getBitmap().compress(CompressFormat.PNG, 100, fos);
                 fos.flush();
                 fos.close();
-                return true;
             } catch (Exception e) {
                 Log.e(TAG, "Unable to store drawable in cache " + e);
             }
         }
-        return false;
     }
 
     private Drawable cacheGetDrawable(String key) {
@@ -339,11 +281,26 @@ public class IconsHandler {
      * {cacheDir}/icons/{icons_pack_package_name}_{key_hash}.png
      */
     private File cacheGetFileName(String key) {
-        return new File(getIconsCacheDir() + iconsPackPackageName + "_" + key.hashCode() + ".png");
+        String iconsPackPackageName = getIconPack().getPackPackageName();
+        return new File(getIconsCacheDir(), iconsPackPackageName + "_" + key.hashCode() + ".png");
     }
 
     private File getIconsCacheDir() {
-        return new File(this.ctx.getCacheDir().getPath() + "/icons/");
+        File dir = new File(this.ctx.getCacheDir(), "icons");
+        if (!dir.exists() && !dir.mkdir())
+            throw new IllegalStateException("failed to create path " + dir.getPath());
+        return dir;
+    }
+
+    private File customIconFileName(String componentName, long customIcon) {
+        return new File(getCustomIconsDir(), customIcon + "_" + componentName.hashCode() + ".png");
+    }
+
+    private File getCustomIconsDir() {
+        File dir = new File(this.ctx.getCacheDir(), "custom_icons");
+        if (!dir.exists() && !dir.mkdir())
+            throw new IllegalStateException("failed to create path " + dir.getPath());
+        return dir;
     }
 
     /**
@@ -352,14 +309,69 @@ public class IconsHandler {
     private void cacheClear() {
         File cacheDir = this.getIconsCacheDir();
 
-        if (!cacheDir.isDirectory())
-            return;
-
-        for (File item : cacheDir.listFiles()) {
-            if (!item.delete()) {
-                Log.w(TAG, "Failed to delete file: " + item.getAbsolutePath());
+        File[] fileList = cacheDir.listFiles();
+        if (fileList != null) {
+            for (File item : fileList) {
+                if (!item.delete()) {
+                    Log.w(TAG, "Failed to delete file: " + item.getAbsolutePath());
+                }
             }
         }
     }
 
+    // Before we fixed the cache path actually returning a folder, a lot of icons got dumped
+    // directly in ctx.getCacheDir() so we need to clean it
+    private void clearOldCache() {
+        File newCacheDir = new File(this.ctx.getCacheDir(), "icons");
+
+        if (!newCacheDir.isDirectory()) {
+            File[] fileList = ctx.getCacheDir().listFiles();
+            if (fileList != null) {
+                int count = 0;
+                for (File file : fileList) {
+                    if (file.isFile())
+                        count += file.delete() ? 1 : 0;
+                }
+                Log.i(TAG, "Removed " + count + " cache file(s) from the old path");
+            }
+        }
+    }
+
+    public Drawable getCustomIcon(String componentName, long customIcon) {
+        if (customIcon == 0)
+            return null;
+
+        try {
+            FileInputStream fis = new FileInputStream(customIconFileName(componentName, customIcon));
+            BitmapDrawable drawable =
+                    new BitmapDrawable(this.ctx.getResources(), BitmapFactory.decodeStream(fis));
+            fis.close();
+            return drawable;
+        } catch (Exception e) {
+            Log.e(TAG, "Unable to get custom icon " + e);
+        }
+
+        return null;
+    }
+
+    private void removeStoredDrawable(@NonNull File drawableFile) {
+        try {
+            //noinspection ResultOfMethodCallIgnored
+            drawableFile.delete();
+        } catch (Exception e) {
+            Log.e(TAG, "stored drawable " + drawableFile + " can't be deleted!", e);
+        }
+    }
+
+    public void changeAppIcon(AppResult appResult, Drawable drawable) {
+        long customIconId = KissApplication.getApplication(ctx).getDataHandler().setCustomAppIcon(appResult.getComponentName());
+        storeDrawable(customIconFileName(appResult.getComponentName(), customIconId), drawable);
+        appResult.setCustomIcon(customIconId, drawable);
+    }
+
+    public void restoreAppIcon(AppResult appResult) {
+        long customIconId = KissApplication.getApplication(ctx).getDataHandler().removeCustomAppIcon(appResult.getComponentName());
+        removeStoredDrawable(customIconFileName(appResult.getComponentName(), customIconId));
+        appResult.clearCustomIcon();
+    }
 }
